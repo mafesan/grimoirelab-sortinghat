@@ -21,6 +21,8 @@
 #
 
 import re
+import pickle
+import uuid
 
 import django.core.exceptions
 import django.db.utils
@@ -30,6 +32,8 @@ from grimoirelab_toolkit.datetime import datetime_utcnow, datetime_to_utc
 from .errors import AlreadyExistsError, NotFoundError
 from .models import (MIN_PERIOD_DATE,
                      MAX_PERIOD_DATE,
+                     Transaction,
+                     Context,
                      Organization,
                      Domain,
                      Country,
@@ -132,7 +136,59 @@ def search_enrollments_in_period(uuid, org_name,
                                      start__lte=to_date, end__gte=from_date).order_by('start')
 
 
-def add_organization(name):
+def add_transaction(operation, entity, timestamp, args, context=None):
+    """Create a new transaction object and save it into the DB.
+
+    :param operation: Type of the operation which is recorded (ADD, DELETE, UPDATE)
+    :param entity: Type of entity involved in the transaction (UUID, ENROLLMENT, etc.)
+    :param timestamp: Datetime when the transaction is created
+    :param args: Input arguments from the method creating the transaction
+    :param context: a Context object
+
+    :returns: a new Transaction object
+    """
+    validate_field('operation', operation)
+    validate_field('entity', entity)
+
+    args_dump = pickle.dumps(args, 0)
+
+    tuid = uuid.uuid4().hex
+
+    transaction = Transaction(tuid=tuid, context=context, operation=operation,
+                              entity=entity, timestamp=timestamp, args=args_dump)
+
+    try:
+        transaction.save()
+    except django.db.utils.IntegrityError as exc:
+        _handle_integrity_error(Transaction, exc)
+
+    return transaction
+
+
+def add_context(method_name, timestamp):
+    """Create a new context object and save it into the DB.
+
+    :param method_name: Name of the method where the context is created
+    :param timestamp: Datetime when the context is created
+
+    :returns: a new Context object
+    """
+
+    validate_field('method_name', method_name)
+
+    cuid = uuid.uuid4().hex
+
+    context = Context(cuid=cuid, operation=method_name, timestamp=timestamp)
+
+    try:
+        context.save()
+    except django.db.utils.IntegrityError as exc:
+        _handle_integrity_error(Context, exc)
+
+    return context
+
+
+def add_organization(name, context=None):
     """Add an organization to the database.
 
     This function adds a new organization to the database,
@@ -142,6 +198,7 @@ def add_organization(name):
     It returns a new `Organization` object.
 
     :param name: name of the organization
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: a new organization
 
@@ -149,6 +206,7 @@ def add_organization(name):
     :raises AlreadyExistsError: when an instance with the same name
         already exists in the database.
     """
+    input_args = locals()
     validate_field('name', name)
 
     organization = Organization(name=name)
@@ -158,10 +216,13 @@ def add_organization(name):
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(Organization, exc)
 
+    add_transaction(operation=Transaction.ADD, entity=Transaction.ORG,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     return organization
 
 
-def delete_organization(organization):
+def delete_organization(organization, context=None):
     """Remove an organization from the database.
 
     Function that removes from the database the organization
@@ -169,15 +230,21 @@ def delete_organization(organization):
     or enrollments are also removed.
 
     :param organization: organization to remove
+    :param context: Context object from the method calling this one, if there is any
     """
+    input_args = locals()
+
     last_modified = datetime_utcnow()
-    UniqueIdentity.objects.filter(enrollments__organization=organization).\
+    UniqueIdentity.objects.filter(enrollments__organization=organization). \
         update(last_modified=last_modified)
 
     organization.delete()
 
+    add_transaction(operation=Transaction.DELETE, entity=Transaction.ORG,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
-def add_domain(organization, domain_name, is_top_domain=False):
+
+def add_domain(organization, domain_name, is_top_domain=False, context=None):
     """Add a domain to the database.
 
     This function adds a new domain to the database using
@@ -192,12 +259,15 @@ def add_domain(organization, domain_name, is_top_domain=False):
     :param organization: links the new domain to this organization object
     :param domain_name: name of the domain
     :param is_top_domain: set this domain as a top domain
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: a new domain
 
     :raises ValueError: raised when `domain_name` is `None` or an empty string;
         when `is_top_domain` does not have a `bool` value.
     """
+    input_args = locals()
+
     validate_field('domain_name', domain_name)
     if not isinstance(is_top_domain, bool):
         raise ValueError("'is_top_domain' must have a boolean value")
@@ -211,20 +281,29 @@ def add_domain(organization, domain_name, is_top_domain=False):
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(Domain, exc)
 
+    add_transaction(operation=Transaction.ADD, entity=Transaction.DOMAIN,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     return domain
 
 
-def delete_domain(domain):
+def delete_domain(domain, context=None):
     """Remove a domain from the database.
 
     Deletes from the database the domain given in `domain`.
 
     :param domain: domain to remove
+    :param context: Context object from the method calling this one, if there is any
     """
+    input_args = locals()
+
     domain.delete()
 
+    add_transaction(operation=Transaction.DELETE, entity=Transaction.DOMAIN,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
-def add_unique_identity(uuid):
+
+def add_unique_identity(uuid, context=None):
     """Add a unique identity to the database.
 
     This function adds a unique identity to the database with
@@ -238,11 +317,13 @@ def add_unique_identity(uuid):
     object.
 
     :param uuid: unique identifier for the unique identity
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: a new unique identity
 
     :raises ValueError: when `uuid` is `None` or an empty string
     """
+    input_args = locals()
     validate_field('uuid', uuid)
 
     uidentity = UniqueIdentity(uuid=uuid)
@@ -252,6 +333,9 @@ def add_unique_identity(uuid):
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(UniqueIdentity, exc)
 
+    transaction = add_transaction(operation=Transaction.ADD, entity=Transaction.UUID,
+                                  timestamp=datetime_utcnow(), args=input_args, context=context)
+
     profile = Profile(uidentity=uidentity)
 
     try:
@@ -259,12 +343,15 @@ def add_unique_identity(uuid):
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(Profile, exc)
 
+    add_transaction(operation=Transaction.ADD, entity=Transaction.PROFILE,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     uidentity.refresh_from_db()
 
     return uidentity
 
 
-def delete_unique_identity(uidentity):
+def delete_unique_identity(uidentity, context=None):
     """Remove a unique identity from the database.
 
     Function that removes from the database the unique identity
@@ -272,12 +359,18 @@ def delete_unique_identity(uidentity):
     also removed.
 
     :param uidentity: unique identity to remove
+    :param context: Context object from the method calling this one, if there is any
     """
+    input_args = locals()
+
     uidentity.delete()
+
+    add_transaction(operation=Transaction.DELETE, entity=Transaction.UUID,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
 
 def add_identity(uidentity, identity_id, source,
-                 name=None, email=None, username=None):
+                 name=None, email=None, username=None, context=None):
     """Add an identity to the database.
 
     This function adds a new identity to the database using
@@ -296,12 +389,15 @@ def add_identity(uidentity, identity_id, source,
     :param name: full name of the identity
     :param email: email of the identity
     :param username: user name used by the identity
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: a new identity
 
     :raises ValueError: when `identity_id` and `source` are `None` or empty;
         when all of the data parameters are `None` or empty.
     """
+    input_args = locals()
+
     validate_field('identity_id', identity_id)
     validate_field('source', source)
     validate_field('name', name, allow_none=True)
@@ -320,10 +416,13 @@ def add_identity(uidentity, identity_id, source,
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(Identity, exc)
 
+    add_transaction(operation=Transaction.ADD, entity=Transaction.UID,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     return identity
 
 
-def delete_identity(identity):
+def delete_identity(identity, context=None):
     """Remove an identity from the database.
 
     This function removes from the database the identity given
@@ -331,12 +430,18 @@ def delete_identity(identity):
     remove unique identities in the case they get empty.
 
     :param identity: identity to remove
+    :param context: Context object from the method calling this one, if there is any
     """
+    input_args = locals()
+
     identity.delete()
     identity.uidentity.save()
 
+    add_transaction(operation=Transaction.DELETE, entity=Transaction.UID,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
-def update_profile(uidentity, **kwargs):
+
+def update_profile(uidentity, context=None, **kwargs):
     """Update unique identity profile.
 
     This function allows to edit or update the profile information
@@ -357,6 +462,7 @@ def update_profile(uidentity, **kwargs):
     the updated data.
 
     :param uidentity: unique identity whose profile will be updated
+    :param context: Context object from the method calling this one, if there is any
     :param kwargs: parameters to edit the profile
 
     :returns: uidentity object with the updated profile
@@ -364,6 +470,7 @@ def update_profile(uidentity, **kwargs):
     :raises ValueError: raised either when `is_bot` does not have a boolean value;
         `gender_acc` is not an `int` or is not in range.
     """
+
     def to_none_if_empty(x):
         return None if not x else x
 
@@ -417,11 +524,15 @@ def update_profile(uidentity, **kwargs):
     profile.save()
     uidentity.save()
 
+    input_args = kwargs.update({'uidentity': uidentity})
+    add_transaction(operation=Transaction.UPDATE, entity=Transaction.PROFILE,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     return uidentity
 
 
 def add_enrollment(uidentity, organization,
-                   start=MIN_PERIOD_DATE, end=MAX_PERIOD_DATE):
+                   start=MIN_PERIOD_DATE, end=MAX_PERIOD_DATE, context=None):
     """Enroll a unique identity to an organization in the database.
 
     The function adds a new relationship between the unique
@@ -439,6 +550,7 @@ def add_enrollment(uidentity, organization,
     :param organization: organization where the unique identity is enrolled
     :param start: date when the enrollment starts
     :param end: date when the enrollment ends
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: a new enrollment
 
@@ -446,6 +558,8 @@ def add_enrollment(uidentity, organization,
         when `start < MIN_PERIOD_DATE`; or `end > MAX_PERIOD_DATE`
         or `start > end`.
     """
+    input_args = locals()
+
     if not start:
         raise ValueError("'start' date cannot be None")
     if not end:
@@ -470,22 +584,31 @@ def add_enrollment(uidentity, organization,
     except django.db.utils.IntegrityError as exc:
         _handle_integrity_error(Identity, exc)
 
+    add_transaction(operation=Transaction.ADD, entity=Transaction.ENROLLMENT,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+
     return enrollment
 
 
-def delete_enrollment(enrollment):
+def delete_enrollment(enrollment, context=None):
     """Remove an enrollment from the database.
 
     This function removes from the database the enrollment given
     in `enrollment`.
 
     :param enrollment: enrollment object to remove
+    :param context: Context object from the method calling this one, if there is any
     """
+    input_args = locals()
+
     enrollment.delete()
     enrollment.uidentity.save()
 
+    add_transaction(operation=Transaction.DELETE, entity=Transaction.ENROLLMENT,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
-def move_identity(identity, uidentity):
+
+def move_identity(identity, uidentity, context=None):
     """Move an identity to a unique identity.
 
     Shifts `identity` to the unique identity given in `uidentity`.
@@ -497,11 +620,14 @@ def move_identity(identity, uidentity):
 
     :param identity: identity to be moved
     :param uidentity: unique identity where `identity` will be moved
+    :param context: Context object from the method calling this one, if there is any
 
     :returns: the unique identity with related identities updated
 
     :raises ValueError: when `identity` is already part of `uidentity`
     """
+    input_args = locals()
+
     if identity.uidentity == uidentity:
         msg = "identity '{}' is already assigned to '{}'".format(identity.id, uidentity.uuid)
         raise ValueError(msg)
@@ -512,6 +638,11 @@ def move_identity(identity, uidentity):
     identity.save()
     old_uidentity.save()
     uidentity.save()
+
+    add_transaction(operation=Transaction.UPDATE, entity=Transaction.UID,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
+    add_transaction(operation=Transaction.UPDATE, entity=Transaction.UUID,
+                    timestamp=datetime_utcnow(), args=input_args, context=context)
 
     return uidentity
 

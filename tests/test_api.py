@@ -37,7 +37,9 @@ from sortinghat.core.models import (Country,
                                     UniqueIdentity,
                                     Identity,
                                     Enrollment,
-                                    Organization)
+                                    Organization,
+                                    Context,
+                                    Transaction)
 
 NOT_FOUND_ERROR = "{entity} not found in the registry"
 ALREADY_EXISTS_ERROR = "{entity} already exists in the registry"
@@ -183,6 +185,31 @@ class TestAddIdentity(TestCase):
         id1 = identities[0]
         self.assertEqual(id1, identity)
 
+        # Check if the contexts and the transactions were created as expected
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 1)
+
+        context = contexts[0]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
     def test_add_new_identities_to_uuid(self):
         """Check if everything goes OK when adding new identities to an existing one"""
 
@@ -265,6 +292,85 @@ class TestAddIdentity(TestCase):
         self.assertEqual(id2.username, 'jdoe')
         self.assertEqual(id2.source, 'scm')
 
+        # Check if all the contexts and the related transactions were properly created
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 5)
+
+        context = contexts[0]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
+        context = contexts[1]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertEqual(transaction.context, context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
+        context = contexts[2]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
+        context = contexts[3]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
+        context = contexts[4]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertEqual(transaction.context, context)
+
     def test_last_modified(self):
         """Check if last modification date is updated"""
 
@@ -343,6 +449,31 @@ class TestAddIdentity(TestCase):
         self.assertEqual(uid4.id, 'e7efdaf17ad2cbc0e239b9afd29f6fe054b3b0fe')
         self.assertEqual(uid5.id, 'c7acd177d107a0aefa6718e2ff0dec6ceba71660')
 
+        # Check if the number of contexts and transactions is what we expect
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 6)
+
+        for context in contexts:
+            self.assertEqual(context.operation, Context.ADD_ID)
+
+            transactions = Transaction.objects.filter(context=context)
+            self.assertEqual(len(transactions), 3)
+
+            transaction = transactions[0]
+            self.assertEqual(transaction.operation, Transaction.ADD)
+            self.assertEqual(transaction.entity, Transaction.UUID)
+            self.assertEqual(transaction.context, context)
+
+            transaction = transactions[1]
+            self.assertEqual(transaction.operation, Transaction.ADD)
+            self.assertEqual(transaction.entity, Transaction.PROFILE)
+            self.assertEqual(transaction.context, context)
+
+            transaction = transactions[2]
+            self.assertEqual(transaction.operation, Transaction.ADD)
+            self.assertEqual(transaction.entity, Transaction.UID)
+            self.assertEqual(transaction.context, context)
+
     def test_duplicate_identities_with_truncated_values(self):
         """Check if the same identity with truncated values is not inserted twice"""
 
@@ -363,6 +494,16 @@ class TestAddIdentity(TestCase):
                              email=email,
                              username=username)
 
+        # Check if it did not create additional context and transactions when failing
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 1)
+
+        context = contexts[0]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 3)
+
     def test_non_existing_uuid(self):
         """Check whether it fails adding identities to one uuid that does not exist"""
 
@@ -376,6 +517,16 @@ class TestAddIdentity(TestCase):
                              email='jsmith@example.com',
                              username=None,
                              uuid='FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF')
+
+        # Check if it did not create additional context and transactions when failing
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 2)
+
+        for context in contexts:
+            self.assertEqual(context.operation, Context.ADD_ID)
+
+            transactions = Transaction.objects.filter(context=context)
+            self.assertEqual(len(transactions), 3)
 
     def test_existing_identity(self):
         """Check if it fails adding an identity that already exists"""
@@ -408,6 +559,16 @@ class TestAddIdentity(TestCase):
         self.assertEqual(context.exception.eid,
                          'f0999c4eed908d33365fa3435d9686d3add2412d')
 
+        # Check if it did not create additional context and transactions when failing
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 3)
+
+        for context in contexts:
+            self.assertEqual(context.operation, Context.ADD_ID)
+
+            transactions = Transaction.objects.filter(context=context)
+            self.assertEqual(len(transactions), 3)
+
     def test_unaccent_identities(self):
         """Check if it fails adding an identity that already exists with accent values"""
 
@@ -433,6 +594,16 @@ class TestAddIdentity(TestCase):
         self.assertEqual(context.exception.eid,
                          'a16659ea83d28c839ffae76ceebb3ca9fb8e8894')
 
+        # Check if it did not create additional context and transactions when failing
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 2)
+
+        for context in contexts:
+            self.assertEqual(context.operation, Context.ADD_ID)
+
+            transactions = Transaction.objects.filter(context=context)
+            self.assertEqual(len(transactions), 3)
+
     def test_utf8_4bytes_identities(self):
         """Check if it inserts identities with 4bytes UTF-8 characters"""
 
@@ -455,6 +626,16 @@ class TestAddIdentity(TestCase):
         self.assertEqual(id1.email, '😂')
         self.assertEqual(id1.username, '😂')
         self.assertEqual(id1.source, 'scm')
+
+        # Check if the number of contexts and transactions is what we expect
+        contexts = Context.objects.all()
+        self.assertEqual(len(contexts), 1)
+
+        context = contexts[0]
+        self.assertEqual(context.operation, Context.ADD_ID)
+
+        transactions = Transaction.objects.filter(context=context)
+        self.assertEqual(len(transactions), 3)
 
     def test_charset(self):
         """Check if it adds two identities with different encoding"""

@@ -18,9 +18,11 @@
 #
 # Authors:
 #     Santiago Dueñas <sduenas@bitergia.com>
+#     Miguel Ángel Fernández <mafesan@bitergia.com>
 #
 
 import datetime
+import pickle
 
 from dateutil.tz import UTC
 
@@ -39,7 +41,9 @@ from sortinghat.core.models import (MIN_PERIOD_DATE,
                                     UniqueIdentity,
                                     Identity,
                                     Profile,
-                                    Enrollment)
+                                    Enrollment,
+                                    Context,
+                                    Transaction)
 
 
 DUPLICATED_ORG_ERROR = "Organization 'Example' already exists in the registry"
@@ -80,6 +84,12 @@ END_DATE_NONE_ERROR = "'end' date cannot be None"
 PERIOD_INVALID_ERROR = "'start' date {start} cannot be greater than {end}"
 PERIOD_OUT_OF_BOUNDS_ERROR = "'{type}' date {date} is out of bounds"
 MOVE_ERROR = "identity '0001' is already assigned to 'AAAA'"
+TRANSACTION_OPERATION_EMPTY_ERROR = "'operation' cannot be an empty string"
+TRANSACTION_OPERATION_NONE_ERROR = "'operation' cannot be None"
+TRANSACTION_ENTITY_EMPTY_ERROR = "'entity' cannot be an empty string"
+TRANSACTION_ENTITY_NONE_ERROR = "'entity' cannot be None"
+CONTEXT_METHOD_NAME_EMPTY_ERROR = "'method_name' cannot be an empty string"
+CONTEXT_METHOD_NAME_NONE_ERROR = "'method_name' cannot be None"
 
 
 class TestFindUniqueIdentity(TestCase):
@@ -273,17 +283,31 @@ class TestAddOrganization(TestCase):
         self.assertIsInstance(org, Organization)
         self.assertEqual(org.name, name)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.ORG)
+        self.assertIsNone(transaction.context)
+
     def test_name_none(self):
         """Check whether organizations with None as name cannot be added"""
 
         with self.assertRaisesRegex(ValueError, NAME_NONE_ERROR):
             db.add_organization(None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_name_empty(self):
         """Check whether organizations with empty names cannot be added"""
 
         with self.assertRaisesRegex(ValueError, NAME_EMPTY_ERROR):
             db.add_organization('')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_name_whitespaces(self):
         """Check whether organizations composed by whitespaces cannot be added"""
@@ -296,6 +320,9 @@ class TestAddOrganization(TestCase):
 
         with self.assertRaisesRegex(ValueError, NAME_WHITESPACES_ERROR):
             db.add_organization(' \t  ')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_integrity_error(self):
         """Check whether organizations with the same name cannot be inserted"""
@@ -353,6 +380,14 @@ class TestDeleteOrganization(TestCase):
 
         enrollments = Enrollment.objects.filter(organization__name='Bitergia')
         self.assertEqual(len(enrollments), 1)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.ORG)
+        self.assertIsNone(transaction.context)
 
     def test_last_modified(self):
         """Check if last modification date is updated"""
@@ -418,6 +453,14 @@ class TestAddDomain(TestCase):
         self.assertEqual(dom.domain, domain_name)
         self.assertEqual(dom.is_top_domain, True)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.DOMAIN)
+        self.assertIsNone(transaction.context)
+
     def test_add_multiple_domains(self):
         """Check if multiple domains can be added"""
 
@@ -443,6 +486,19 @@ class TestAddDomain(TestCase):
         self.assertEqual(dom.domain, 'my.example.net')
         self.assertEqual(dom.is_top_domain, False)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 2)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.DOMAIN)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.DOMAIN)
+        self.assertIsNone(transaction.context)
+
     def test_domain_none(self):
         """Check whether domains with None name cannot be added"""
 
@@ -451,6 +507,9 @@ class TestAddDomain(TestCase):
         with self.assertRaisesRegex(ValueError, DOMAIN_NAME_NONE_ERROR):
             db.add_domain(org, None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_domain_empty(self):
         """Check whether domains with empty names cannot be added"""
 
@@ -458,6 +517,9 @@ class TestAddDomain(TestCase):
 
         with self.assertRaisesRegex(ValueError, DOMAIN_NAME_EMPTY_ERROR):
             db.add_domain(org, '')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_domain_whitespaces(self):
         """Check whether domains with names composed by whitespaces cannot be added"""
@@ -473,6 +535,9 @@ class TestAddDomain(TestCase):
         with self.assertRaisesRegex(ValueError, DOMAIN_NAME_WHITESPACES_ERROR):
             db.add_domain(org, ' \t ')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_top_domain_invalid_type(self):
         """Check type values of top domain flag"""
 
@@ -483,6 +548,9 @@ class TestAddDomain(TestCase):
 
         with self.assertRaisesRegex(ValueError, TOP_DOMAIN_VALUE_ERROR):
             db.add_domain(org, 'example.net', is_top_domain='False')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_integrity_error(self):
         """Check whether domains with the same domain name cannot be inserted"""
@@ -519,6 +587,14 @@ class TestDeleteDomain(TestCase):
         org.refresh_from_db()
         self.assertEqual(len(org.domains.all()), 1)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.DOMAIN)
+        self.assertIsNone(transaction.context)
+
 
 class TestAddUniqueIdentity(TestCase):
     """Unit tests for add_unique_identity"""
@@ -540,6 +616,19 @@ class TestAddUniqueIdentity(TestCase):
         self.assertEqual(uidentity.profile.name, None)
         self.assertEqual(uidentity.profile.email, None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 2)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
+
     def test_add_unique_identities(self):
         """Check whether it adds a set of unique identities"""
 
@@ -557,17 +646,56 @@ class TestAddUniqueIdentity(TestCase):
             self.assertEqual(uidentity.profile.name, None)
             self.assertEqual(uidentity.profile.email, None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 6)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[3]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[4]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[5]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
+
     def test_uuid_none(self):
         """Check whether a unique identity with None as UUID cannot be added"""
 
         with self.assertRaisesRegex(ValueError, UUID_NONE_ERROR):
             db.add_unique_identity(None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_uuid_empty(self):
         """Check whether a unique identity with empty UUID cannot be added"""
 
         with self.assertRaisesRegex(ValueError, UUID_EMPTY_ERROR):
             db.add_unique_identity('')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_uuid_whitespaces(self):
         """Check whether a unique identity with UUID composed by whitespaces cannot be added"""
@@ -580,6 +708,9 @@ class TestAddUniqueIdentity(TestCase):
 
         with self.assertRaisesRegex(ValueError, UUID_WHITESPACES_ERROR):
             db.add_unique_identity(' \t  ')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_integrity_error(self):
         """Check whether unique identities with the same UUID cannot be inserted"""
@@ -644,6 +775,14 @@ class TestDeleteUniqueIdentity(TestCase):
         self.assertEqual(len(jdoe.identities.all()), 1)
         self.assertEqual(len(jdoe.enrollments.all()), 2)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
     def test_delete_unique_identities(self):
         """Check if it deletes a set of unique identities"""
 
@@ -663,6 +802,24 @@ class TestDeleteUniqueIdentity(TestCase):
                 UniqueIdentity.objects.get(uuid=uuid)
 
         self.assertEqual(len(UniqueIdentity.objects.all()), 0)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
 
 
 class TestAddIdentity(TestCase):
@@ -697,6 +854,14 @@ class TestAddIdentity(TestCase):
         self.assertEqual(identity.name, 'John Smith')
         self.assertEqual(identity.email, 'jsmith@example.org')
         self.assertEqual(identity.username, 'jsmith')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
 
     def test_add_multiple_identities(self):
         """Check if multiple identities can be added"""
@@ -746,6 +911,24 @@ class TestAddIdentity(TestCase):
         self.assertEqual(identity.email, None)
         self.assertEqual(identity.username, 'jsmith')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
+
     def test_last_modified(self):
         """Check if last modification date is updated"""
 
@@ -778,6 +961,9 @@ class TestAddIdentity(TestCase):
         with self.assertRaisesRegex(ValueError, IDENTITY_ID_NONE_ERROR):
             db.add_identity(uidentity, None, 'scm')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_identity_id_empty(self):
         """Check whether an identity with empty ID cannot be added"""
 
@@ -785,6 +971,9 @@ class TestAddIdentity(TestCase):
 
         with self.assertRaisesRegex(ValueError, IDENTITY_ID_EMPTY_ERROR):
             db.add_identity(uidentity, '', 'scm')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_identity_id_whitespaces(self):
         """Check whether an identity with an ID composed by whitespaces cannot be added"""
@@ -800,6 +989,9 @@ class TestAddIdentity(TestCase):
         with self.assertRaisesRegex(ValueError, IDENTITY_ID_WHITESPACES_ERROR):
             db.add_identity(uidentity, '  \t', 'scm')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_source_none(self):
         """Check whether an identity with None as source cannot be added"""
 
@@ -808,6 +1000,9 @@ class TestAddIdentity(TestCase):
         with self.assertRaisesRegex(ValueError, SOURCE_NONE_ERROR):
             db.add_identity(uidentity, '1234567890ABCDFE', None)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_source_empty(self):
         """Check whether an identity with empty source cannot be added"""
 
@@ -815,6 +1010,9 @@ class TestAddIdentity(TestCase):
 
         with self.assertRaisesRegex(ValueError, SOURCE_EMPTY_ERROR):
             db.add_identity(uidentity, '1234567890ABCDFE', '')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_source_whitespaces(self):
         """Check whether an identity with a source composed by whitespaces cannot be added"""
@@ -829,6 +1027,9 @@ class TestAddIdentity(TestCase):
 
         with self.assertRaisesRegex(ValueError, SOURCE_WHITESPACES_ERROR):
             db.add_identity(uidentity, '1234567890ABCDFE', ' \t ')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_data_none_or_empty(self):
         """
@@ -884,6 +1085,9 @@ class TestAddIdentity(TestCase):
         with self.assertRaisesRegex(ValueError, expected):
             db.add_identity(uidentity, '1234567890ABCDFE', 'git',
                             name=' \t ', email=None, username='')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_integrity_error_id(self):
         """Check whether identities with the same id cannot be inserted"""
@@ -944,6 +1148,14 @@ class TestDeleteIdentity(TestCase):
 
         jsmith.refresh_from_db()
         self.assertEqual(len(jsmith.identities.all()), 2)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
 
     def test_last_modified(self):
         """Check if last modification date is updated"""
@@ -1007,6 +1219,14 @@ class TestUpdateProfile(TestCase):
         uidentity_db = UniqueIdentity.objects.get(uuid=uuid)
         self.assertEqual(profile, uidentity_db.profile)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.UPDATE)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
+
     def test_last_modified(self):
         """Check if last modification date is updated"""
 
@@ -1031,10 +1251,18 @@ class TestUpdateProfile(TestCase):
         uidentity = UniqueIdentity.objects.create(uuid='1234567890ABCDFE')
         Profile.objects.create(uidentity=uidentity)
 
-        uidentity = db.update_profile(uidentity, nme='', email='')
+        uidentity = db.update_profile(uidentity, name='', email='')
         profile = uidentity.profile
         self.assertEqual(profile.name, None)
         self.assertEqual(profile.email, None)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.UPDATE)
+        self.assertEqual(transaction.entity, Transaction.PROFILE)
+        self.assertIsNone(transaction.context)
 
     def test_is_bot_invalid_type(self):
         """Check type values of is_bot parameter"""
@@ -1047,6 +1275,9 @@ class TestUpdateProfile(TestCase):
 
         with self.assertRaisesRegex(ValueError, IS_BOT_VALUE_ERROR):
             db.update_profile(uidentity, is_bot='True')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_country_code_not_valid(self):
         """Check if it fails when the given country is not valid"""
@@ -1063,6 +1294,9 @@ class TestUpdateProfile(TestCase):
         with self.assertRaisesRegex(ValueError, msg):
             db.update_profile(uidentity, country_code='JKL')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_gender_not_given(self):
         """Check if it fails when gender_acc is given but not the gender"""
 
@@ -1071,6 +1305,9 @@ class TestUpdateProfile(TestCase):
 
         with self.assertRaisesRegex(ValueError, GENDER_ACC_INVALID_ERROR):
             db.update_profile(uidentity, gender_acc=100)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_gender_acc_invalid_type(self):
         """Check type values of gender_acc parameter"""
@@ -1085,6 +1322,9 @@ class TestUpdateProfile(TestCase):
         with self.assertRaisesRegex(ValueError, GENDER_ACC_INVALID_TYPE_ERROR):
             db.update_profile(uidentity,
                               gender='male', gender_acc='100')
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_gender_acc_invalid_range(self):
         """Check if it fails when gender_acc is given but not the gender"""
@@ -1109,6 +1349,9 @@ class TestUpdateProfile(TestCase):
         with self.assertRaisesRegex(ValueError, msg):
             db.update_profile(uidentity,
                               gender='male', gender_acc=101)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
 
 class TestAddEnrollment(TestCase):
@@ -1140,6 +1383,14 @@ class TestAddEnrollment(TestCase):
 
         enrollment_db = enrollments[0]
         self.assertEqual(enrollment, enrollment_db)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.ENROLLMENT)
+        self.assertIsNone(transaction.context)
 
     def test_add_multiple_enrollments(self):
         """Check if multiple enrollments can be added"""
@@ -1185,6 +1436,24 @@ class TestAddEnrollment(TestCase):
         self.assertIsInstance(enrollment.organization, Organization)
         self.assertEqual(enrollment.organization.name, name)
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 3)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.ENROLLMENT)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.ENROLLMENT)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[2]
+        self.assertEqual(transaction.operation, Transaction.ADD)
+        self.assertEqual(transaction.entity, Transaction.ENROLLMENT)
+        self.assertIsNone(transaction.context)
+
     def test_last_modified(self):
         """Check if last modification date is updated"""
 
@@ -1210,6 +1479,9 @@ class TestAddEnrollment(TestCase):
             db.add_enrollment(uidentity, org,
                               start=None, end=datetime.datetime(1999, 1, 1, tzinfo=UTC))
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
     def test_to_date_none(self):
         """Check if an enrollment cannot be added when to_date is None"""
 
@@ -1219,6 +1491,9 @@ class TestAddEnrollment(TestCase):
         with self.assertRaisesRegex(ValueError, END_DATE_NONE_ERROR):
             db.add_enrollment(uidentity, org,
                               start=datetime.datetime(2001, 1, 1, tzinfo=UTC), end=None)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_period_invalid(self):
         """Check whether enrollments cannot be added giving invalid period ranges"""
@@ -1236,6 +1511,9 @@ class TestAddEnrollment(TestCase):
             db.add_enrollment(uidentity, org,
                               start=datetime.datetime(2001, 1, 1, tzinfo=UTC),
                               end=datetime.datetime(1999, 1, 1, tzinfo=UTC))
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
 
     def test_period_out_of_bounds(self):
         """Check whether enrollments cannot be added giving a range out of bounds"""
@@ -1283,6 +1561,9 @@ class TestAddEnrollment(TestCase):
             db.add_enrollment(uidentity, org,
                               end=datetime.datetime(1899, 12, 31, 23, 59, 59, tzinfo=UTC))
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
 
 class TestDeleteEnrollment(TestCase):
     """Unit tests for delete_enrollment"""
@@ -1327,6 +1608,14 @@ class TestDeleteEnrollment(TestCase):
 
         enrollments = Enrollment.objects.filter(organization__name='Bitergia')
         self.assertEqual(len(enrollments), 1)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 1)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.DELETE)
+        self.assertEqual(transaction.entity, Transaction.ENROLLMENT)
+        self.assertIsNone(transaction.context)
 
     def test_last_modified(self):
         """Check if last modification date is updated"""
@@ -1389,6 +1678,19 @@ class TestMoveIdentity(TestCase):
         self.assertEqual(identity.id, '0001')
         self.assertEqual(identity.name, 'John Smith')
 
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 2)
+
+        transaction = transactions[0]
+        self.assertEqual(transaction.operation, Transaction.UPDATE)
+        self.assertEqual(transaction.entity, Transaction.UID)
+        self.assertIsNone(transaction.context)
+
+        transaction = transactions[1]
+        self.assertEqual(transaction.operation, Transaction.UPDATE)
+        self.assertEqual(transaction.entity, Transaction.UUID)
+        self.assertIsNone(transaction.context)
+
     def test_last_modified(self):
         """Check if last modification date is updated"""
 
@@ -1428,3 +1730,116 @@ class TestMoveIdentity(TestCase):
 
         uidentity = UniqueIdentity.objects.get(uuid='AAAA')
         self.assertEqual(len(uidentity.identities.all()), 1)
+
+        transactions = Transaction.objects.all()
+        self.assertEqual(len(transactions), 0)
+
+
+class TestAddContext(TestCase):
+    """Unit tests for add_context"""
+
+    def test_add_context(self):
+        """Check if a new context is added"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        context = db.add_context(method_name=Context.ADD_ID, timestamp=timestamp)
+        self.assertIsInstance(context, Context)
+
+        context_db = Context.objects.get(cuid=context.cuid)
+        self.assertIsInstance(context_db, Context)
+        self.assertEqual(context_db.operation, Context.ADD_ID)
+        self.assertEqual(context_db.timestamp, timestamp)
+
+    def test_method_name_empty(self):
+        """Check if it fails when `method_name` field is an empty string"""
+
+        timestamp = datetime_utcnow()
+
+        with self.assertRaisesRegex(ValueError, CONTEXT_METHOD_NAME_EMPTY_ERROR):
+            db.add_context(method_name='', timestamp=timestamp)
+
+    def test_method_name_none(self):
+        """Check if it fails when `method_name` field is `None`"""
+
+        timestamp = datetime_utcnow()
+
+        with self.assertRaisesRegex(ValueError, CONTEXT_METHOD_NAME_NONE_ERROR):
+            db.add_context(method_name=None, timestamp=timestamp)
+
+
+class TestAddTransaction(TestCase):
+    """Unit tests for add_transaction"""
+
+    def test_add_transaction(self):
+        """Check if a new transaction is added"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+        context = Context.objects.create(cuid='1234567890abcdef', operation=Context.ADD_ID, timestamp=timestamp)
+
+        transaction = db.add_transaction(operation=Transaction.ADD, entity=Transaction.UUID,
+                                         timestamp=timestamp, args=input_args, context=context)
+        self.assertIsInstance(transaction, Transaction)
+
+        transaction_db = Transaction.objects.get(tuid=transaction.tuid)
+        self.assertIsInstance(transaction_db, Transaction)
+        self.assertEqual(transaction_db.operation, Transaction.ADD)
+        self.assertEqual(transaction_db.entity, Transaction.UUID)
+        self.assertEqual(transaction_db.timestamp, timestamp)
+        self.assertEqual(transaction_db.context, context)
+        self.assertEqual(transaction_db.args, pickle.dumps(input_args, 0))
+        self.assertEqual(input_args, pickle.loads(transaction_db.args))
+
+    def test_context_none(self):
+        """Check if it does not fail when context is `None`"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        transaction = db.add_transaction(operation=Transaction.ADD, entity=Transaction.UUID,
+                                         timestamp=timestamp, args=input_args, context=None)
+
+        transaction_db = Transaction.objects.get(tuid=transaction.tuid)
+        self.assertIsNone(transaction_db.context)
+
+    def test_operation_empty(self):
+        """Check if it fails when operation field is an empty string"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        with self.assertRaisesRegex(ValueError, TRANSACTION_OPERATION_EMPTY_ERROR):
+            db.add_transaction(operation='', entity=Transaction.UUID,
+                               timestamp=timestamp, args=input_args, context=None)
+
+    def test_operation_none(self):
+        """Check if it fails when operation field is `None`"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        with self.assertRaisesRegex(ValueError, TRANSACTION_OPERATION_NONE_ERROR):
+            db.add_transaction(operation=None, entity=Transaction.UUID,
+                               timestamp=timestamp, args=input_args, context=None)
+
+    def test_entity_empty(self):
+        """Check if it fails when entity field is an empty string"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        with self.assertRaisesRegex(ValueError, TRANSACTION_ENTITY_EMPTY_ERROR):
+            db.add_transaction(operation=Transaction.ADD, entity='',
+                               timestamp=timestamp, args=input_args, context=None)
+
+    def test_entity_none(self):
+        """Check if it fails when entity field is `None`"""
+
+        timestamp = datetime_utcnow()
+        input_args = {'uuid': '12345abcd'}
+
+        with self.assertRaisesRegex(ValueError, TRANSACTION_ENTITY_NONE_ERROR):
+            db.add_transaction(operation=Transaction.ADD, entity=None,
+                               timestamp=timestamp, args=input_args, context=None)

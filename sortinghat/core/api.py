@@ -24,7 +24,7 @@ import hashlib
 
 import django.db.transaction
 
-from grimoirelab_toolkit.datetime import datetime_to_utc
+from grimoirelab_toolkit.datetime import datetime_to_utc, datetime_utcnow
 
 from .db import (find_unique_identity,
                  find_identity,
@@ -39,9 +39,10 @@ from .db import (find_unique_identity,
                  update_profile as update_profile_db,
                  move_identity as move_identity_db,
                  add_enrollment,
-                 delete_enrollment)
+                 delete_enrollment,
+                 add_context)
 from .errors import InvalidValueError, AlreadyExistsError, NotFoundError
-from .models import MIN_PERIOD_DATE, MAX_PERIOD_DATE
+from .models import Context, MIN_PERIOD_DATE, MAX_PERIOD_DATE
 from .utils import unaccent_string, merge_datetime_ranges
 
 
@@ -149,6 +150,8 @@ def add_identity(source, name=None, email=None, username=None, uuid=None):
     :raises NotFoundError: raised when the unique identity
         associated to the given `uuid` is not in the registry.
     """
+    context = add_context(method_name=Context.ADD_ID,
+                          timestamp=datetime_utcnow())
     try:
         id_ = generate_uuid(source, email=email,
                             name=name, username=username)
@@ -156,13 +159,14 @@ def add_identity(source, name=None, email=None, username=None, uuid=None):
         raise InvalidValueError(msg=str(e))
 
     if not uuid:
-        uidentity = add_unique_identity_db(id_)
+        uidentity = add_unique_identity_db(id_, context=context)
     else:
         uidentity = find_unique_identity(uuid)
 
+    args = {'uidentity': uidentity, 'identity_id': id_, 'source': source,
+            'name': name, 'email': email, 'username': username, 'context': context}
     try:
-        identity = add_identity_db(uidentity, id_, source,
-                                   name=name, email=email, username=username)
+        identity = add_identity_db(**args)
     except ValueError as e:
         raise InvalidValueError(msg=str(e))
 
@@ -202,14 +206,17 @@ def delete_identity(uuid):
     if uuid == '':
         raise InvalidValueError(msg="'uuid' cannot be an empty string")
 
+    context = add_context(method_name=Context.DELETE_ID,
+                          timestamp=datetime_utcnow())
+
     identity = find_identity(uuid)
     uidentity = identity.uidentity
 
     if uidentity.uuid == uuid:
-        delete_unique_identity_db(identity.uidentity)
+        delete_unique_identity_db(identity.uidentity, context=context)
         uidentity = None
     else:
-        delete_identity_db(identity)
+        delete_identity_db(identity, context=context)
         uidentity.refresh_from_db()
 
     return uidentity
@@ -249,10 +256,13 @@ def update_profile(uuid, **kwargs):
     :raises InvalidValueError: raised when any of the keyword arguments
         has an invalid value.
     """
+    context = add_context(method_name=Context.UPDATE_PROFILE,
+                          timestamp=datetime_utcnow())
+
     uidentity = find_unique_identity(uuid)
 
     try:
-        uidentity = update_profile_db(uidentity, **kwargs)
+        uidentity = update_profile_db(uidentity, context=context, **kwargs)
     except ValueError as e:
         raise InvalidValueError(msg=str(e))
 
@@ -300,6 +310,9 @@ def move_identity(from_id, to_uuid):
     if to_uuid == '':
         raise InvalidValueError(msg="'to_uuid' cannot be an empty string")
 
+    context = add_context(method_name=Context.MOVE_ID,
+                          timestamp=datetime_utcnow())
+
     identity = find_identity(from_id)
 
     try:
@@ -307,12 +320,12 @@ def move_identity(from_id, to_uuid):
     except NotFoundError as exc:
         # Move identity to a new one
         if identity.id == to_uuid:
-            to_uid = add_unique_identity_db(identity.id)
+            to_uid = add_unique_identity_db(identity.id, context=context)
         else:
             raise exc
 
     try:
-        uidentity = move_identity_db(identity, to_uid)
+        uidentity = move_identity_db(identity, to_uid, context=context)
     except ValueError:
         # Case when the identity is already assigned to the unique identity
         uidentity = to_uid
@@ -341,8 +354,10 @@ def add_organization(name):
     if name == '':
         raise InvalidValueError(msg="'name' cannot be an empty string")
 
+    context = add_context(method_name=Context.ADD_ORG,
+                          timestamp=datetime_utcnow())
     try:
-        org = add_organization_db(name=name)
+        org = add_organization_db(name=name, context=context)
     except ValueError as e:
         raise InvalidValueError(msg=str(e))
     except AlreadyExistsError as exc:
@@ -372,6 +387,9 @@ def delete_organization(name):
     if name == '':
         raise InvalidValueError(msg="'name' cannot be an empty string")
 
+    context = add_context(method_name=Context.DELETE_ORG,
+                          timestamp=datetime_utcnow())
+
     try:
         org = find_organization(name)
     except ValueError as e:
@@ -379,7 +397,7 @@ def delete_organization(name):
     except NotFoundError as exc:
         raise exc
 
-    delete_organization_db(organization=org)
+    delete_organization_db(organization=org, context=context)
 
     return org
 
@@ -431,6 +449,9 @@ def enroll(uuid, organization, from_date=None, to_date=None):
     if organization == '':
         raise InvalidValueError(msg="organization cannot be an empty string")
 
+    context = add_context(method_name=Context.ENROLL,
+                          timestamp=datetime_utcnow())
+
     from_date = datetime_to_utc(from_date) if from_date else MIN_PERIOD_DATE
     to_date = datetime_to_utc(to_date) if to_date else MAX_PERIOD_DATE
 
@@ -461,11 +482,11 @@ def enroll(uuid, organization, from_date=None, to_date=None):
 
     # Remove old enrollments and add new ones based in the new ranges
     for enrollment_db in enrollments_db:
-        delete_enrollment(enrollment_db)
+        delete_enrollment(enrollment_db, context=context)
 
     try:
         for start_dt, end_dt in merge_datetime_ranges(periods):
-            add_enrollment(uidentity, org, start=start_dt, end=end_dt)
+            add_enrollment(uidentity, org, start=start_dt, end=end_dt, context=context)
     except ValueError as e:
         raise InvalidValueError(msg=str(e))
 
@@ -522,6 +543,9 @@ def withdraw(uuid, organization, from_date=None, to_date=None):
     if organization == '':
         raise InvalidValueError(msg="organization cannot be an empty string")
 
+    context = add_context(method_name=Context.WITHDRAW,
+                          timestamp=datetime_utcnow())
+
     from_date = datetime_to_utc(from_date) if from_date else MIN_PERIOD_DATE
     to_date = datetime_to_utc(to_date) if to_date else MAX_PERIOD_DATE
 
@@ -554,16 +578,16 @@ def withdraw(uuid, organization, from_date=None, to_date=None):
     for enrollment_db in enrollments_db:
         mins.append(enrollment_db.start)
         maxs.append(enrollment_db.end)
-        delete_enrollment(enrollment_db)
+        delete_enrollment(enrollment_db, context=context)
 
     min_range = min(mins)
     max_range = max(maxs)
 
     try:
         if min_range < from_date:
-            add_enrollment(uidentity, org, start=min_range, end=from_date)
+            add_enrollment(uidentity, org, start=min_range, end=from_date, context=context)
         if max_range > to_date:
-            add_enrollment(uidentity, org, start=to_date, end=max_range)
+            add_enrollment(uidentity, org, start=to_date, end=max_range, context=context)
     except ValueError as e:
         raise InvalidValueError(msg=str(e))
 
@@ -603,7 +627,7 @@ def merge_identities(from_uuid, to_uuid):
     :raises NotFoundError: raised when either `from_uuid` or `to_uuid`
         do not exist in the registry
     """
-    def _merge_enrollments(from_uid, to_uid):
+    def _merge_enrollments(from_uid, to_uid, context):
         """Merge enrollments from two `UniqueIdentity` objects"""
         # Get current enrollments from both uidentities
         enrollments_db = from_uid.enrollments.all() | to_uid.enrollments.all()
@@ -617,14 +641,14 @@ def merge_identities(from_uuid, to_uuid):
 
         # Remove old enrollments and add new ones based in the new ranges
         for enrollment_db in enrollments_db:
-            delete_enrollment(enrollment_db)
+            delete_enrollment(enrollment_db, context=context)
 
         # Add new enrollments merging datetime ranges
         for org in enrollments.keys():
             periods = enrollments[org]
             try:
                 for start_dt, end_dt in merge_datetime_ranges(periods, exclude_limits=True):
-                    add_enrollment(to_uid, org, start=start_dt, end=end_dt)
+                    add_enrollment(to_uid, org, start=start_dt, end=end_dt, context=context)
             except ValueError as e:
                 raise InvalidValueError(msg=str(e))
 
@@ -659,6 +683,9 @@ def merge_identities(from_uuid, to_uuid):
     if from_uuid == to_uuid:
         raise InvalidValueError(msg="'from_uuid' and 'to_uuid' cannot be equal")
 
+    context = add_context(method_name=Context.MERGE_IDENTITIES,
+                          timestamp=datetime_utcnow())
+
     try:
         from_uid = find_unique_identity(from_uuid)
         to_uid = find_unique_identity(to_uuid)
@@ -672,14 +699,14 @@ def merge_identities(from_uuid, to_uuid):
         raise InvalidValueError(msg=str(e))
 
     for identity in identities:
-        move_identity_db(identity, to_uid)
+        move_identity_db(identity, to_uid, context=context)
 
-    to_uid = _merge_enrollments(from_uid, to_uid)
+    to_uid = _merge_enrollments(from_uid, to_uid, context=context)
     to_uid.refresh_from_db()
 
     to_uid = _merge_profiles(from_uid, to_uid)
-    update_profile_db(to_uid)
+    update_profile_db(to_uid, context=context)
 
-    delete_unique_identity_db(from_uid)
+    delete_unique_identity_db(from_uid, context=context)
 
     return to_uid

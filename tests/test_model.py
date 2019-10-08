@@ -18,6 +18,7 @@
 #
 # Authors:
 #     Santiago Dueñas <sduenas@bitergia.com>
+#     Miguel Ángel Fernández <mafesan@bitergia.com>
 #
 
 import datetime
@@ -37,7 +38,9 @@ from sortinghat.core.models import (Organization,
                                     Identity,
                                     Profile,
                                     Enrollment,
-                                    MatchingBlacklist)
+                                    MatchingBlacklist,
+                                    Context,
+                                    Transaction)
 
 # Test check errors messages
 DUPLICATE_CHECK_ERROR = "Duplicate entry .+"
@@ -598,3 +601,67 @@ class TestMatchingBlacklist(TransactionTestCase):
         self.assertEqual(mb.excluded, 'J. Smith')
         self.assertGreaterEqual(mb.last_modified, before_modified_dt)
         self.assertLessEqual(mb.last_modified, after_modified_dt)
+
+
+class TestContext(TransactionTestCase):
+    """Unit tests for Context class"""
+
+    def test_unique_contexts(self):
+        """Check whether contexts are unique"""
+
+        with self.assertRaisesRegex(IntegrityError, DUPLICATE_CHECK_ERROR):
+            timestamp = datetime_utcnow()
+            Context.objects.create(cuid='12345abcd',
+                                   operation=Context.ADD_ID, timestamp=timestamp)
+            Context.objects.create(cuid='12345abcd',
+                                   operation=Context.ADD_ID, timestamp=timestamp)
+
+    def test_created_at(self):
+        """Check creation date is only set when the object is created"""
+
+        before_dt = datetime_utcnow()
+        ctx = Context.objects.create(cuid='12345abcd',
+                                     operation=Context.ADD_ID, timestamp=datetime_utcnow())
+        after_dt = datetime_utcnow()
+
+        self.assertGreaterEqual(ctx.created_at, before_dt)
+        self.assertLessEqual(ctx.created_at, after_dt)
+
+        ctx.save()
+
+        self.assertGreaterEqual(ctx.created_at, before_dt)
+        self.assertLessEqual(ctx.created_at, after_dt)
+
+
+class TestTransaction(TransactionTestCase):
+    """Unit tests for Transaction class"""
+
+    def test_unique_transaction(self):
+        """Check whether contexts are unique"""
+
+        with self.assertRaisesRegex(IntegrityError, DUPLICATE_CHECK_ERROR):
+            timestamp = datetime_utcnow()
+            Transaction.objects.create(tuid='12345abcd', operation=Transaction.ADD,
+                                       entity=Transaction.UID, context=None,
+                                       timestamp=timestamp, args=b'testargs')
+            Transaction.objects.create(tuid='12345abcd', operation=Transaction.ADD,
+                                       entity=Transaction.UID, context=None,
+                                       timestamp=timestamp, args=b'testargs')
+
+    def test_created_at(self):
+        """Check creation date is only set when the object is created"""
+
+        before_dt = datetime_utcnow()
+        transaction = Transaction.objects.create(tuid='add_uid@test', operation='add', entity='uid',
+                                                 context=None, timestamp=datetime_utcnow(), args=b'testargs')
+        after_dt = datetime_utcnow()
+
+        self.assertGreaterEqual(transaction.created_at, before_dt)
+        self.assertLessEqual(transaction.created_at, after_dt)
+
+    def test_empty_args(self):
+        """Check if an error is raised when no args are set"""
+
+        with self.assertRaisesRegex(IntegrityError, NULL_VALUE_CHECK_ERROR):
+            Transaction.objects.create(tuid='add_uid@test', operation='add', entity='uid',
+                                       context=None, timestamp=datetime_utcnow(), args=None)

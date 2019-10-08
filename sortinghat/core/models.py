@@ -17,6 +17,7 @@
 #
 # Authors:
 #     Santiago Dueñas <sduenas@bitergia.com>
+#     Miguel Ángel Fernández <mafesan@bitergia.com>
 #
 
 import datetime
@@ -31,7 +32,8 @@ from django.db.models import (CASCADE,
                               DateTimeField,
                               PositiveIntegerField,
                               ForeignKey,
-                              OneToOneField)
+                              OneToOneField,
+                              BinaryField)
 
 from grimoirelab_toolkit.datetime import datetime_utcnow
 
@@ -183,3 +185,63 @@ class MatchingBlacklist(ModelBase):
 
     class Meta:
         db_table = 'matching_blacklist'
+
+
+class Context(ModelBase):
+    ADD_ID = 'add_identity'
+    DELETE_ID = 'delete_identity'
+    UPDATE_PROFILE = 'update_profile'
+    MOVE_ID = 'move_identity'
+    ADD_ORG = 'add_organization'
+    DELETE_ORG = 'delete_organization'
+    ENROLL = 'enroll'
+    WITHDRAW = 'withdraw'
+    MERGE_IDENTITIES = 'merge_identities'
+
+    OPERATION_CHOICES = ((ADD_ID, 'add_identity'), (DELETE_ID, 'delete_identity'),
+                         (UPDATE_PROFILE, 'update_profile'), (MOVE_ID, 'move_identity'),
+                         (ADD_ORG, 'add_organization'), (DELETE_ORG, 'delete_organization'),
+                         (ENROLL, 'enroll'), (WITHDRAW, 'withdraw'), (MERGE_IDENTITIES, 'merge_identities'))
+
+    cuid = CharField(max_length=MAX_SIZE_CHAR_FIELD, primary_key=True, null=False)
+    operation = CharField(max_length=MAX_SIZE_CHAR_FIELD, choices=OPERATION_CHOICES, null=False)
+    timestamp = CreationDateTimeField()
+
+    class Meta:
+        db_table = 'contexts'
+        ordering = ('timestamp', 'cuid')
+
+    def __str__(self):
+        return '%s - %s' % (self.cuid, self.operation)
+
+
+class Transaction(ModelBase):
+    ADD = 'add'
+    DELETE = 'delete'
+    UPDATE = 'update'
+    UUID = 'uuid'
+    UID = 'uid'
+    ORG = 'org'
+    DOMAIN = 'domain'
+    ENROLLMENT = 'enrollment'
+    PROFILE = 'profile'
+    BLACKLIST = 'blacklist'
+
+    OPERATION_CHOICES = ((ADD, 'add'), (DELETE, 'delete'), (UPDATE, 'update'))
+    ENTITY_CHOICES = ((UUID, 'unique_identity'), (UID, 'identity'), (ORG, 'organization'),
+                     (DOMAIN, 'domain'), (ENROLLMENT, 'enrollment'), (PROFILE, 'profile'),
+                     (BLACKLIST, 'blacklist_entry'))
+
+    tuid = CharField(max_length=MAX_SIZE_CHAR_FIELD, primary_key=True, null=False)
+    operation = CharField(max_length=MAX_SIZE_CHAR_FIELD, choices=OPERATION_CHOICES, null=False)
+    entity = CharField(max_length=MAX_SIZE_CHAR_FIELD, choices=ENTITY_CHOICES, null=False)
+    context = ForeignKey(Context, null=True, on_delete=SET_NULL, db_column='cuid')
+    timestamp = CreationDateTimeField()
+    args = BinaryField()
+
+    class Meta:
+        db_table = 'transactions'
+        ordering = ('timestamp', 'tuid', 'context')
+
+    def __str__(self):
+        return '%s - %s - %s - %s' % (self.tuid, self.context, self.operation, self.entity)
